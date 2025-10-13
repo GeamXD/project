@@ -1,0 +1,95 @@
+module Main where
+
+import Daml.Script
+
+type AssetId = ContractId Asset
+
+template Asset
+  with
+    issuer : Party
+    owner  : Party
+    name   : Text
+  wheremodule PersonData where
+
+import Daml.Script
+import DA.Optional (Optional(..))
+import DA.List (delete)
+
+data PersonKey = PersonKey with
+   keyIssuer : Party
+   keyDataId : Text
+ deriving (Eq, Show)
+
+template PersonData
+ with
+   issuer : Party  
+   owner : Party    
+   dataId : Text     
+   personalInfo : (Text, Text, Int)
+   addresses : [Text]
+   contact : Optional Text
+ where
+   signatory issuer, owner
+   ensure dataId /= ""
+
+   choice UpdatePersonalInfo : ContractId PersonData
+     with
+       newInfo : (Text, Text, Int)
+     controller owner
+     do
+       archive self
+       create this with personalInfo = newInfo
+
+   choice AddAddress : ContractId PersonData
+     with
+       newAddress : Text
+     controller owner
+     do
+       archive self
+       create this with addresses = newAddress :: addresses
+
+   choice SetContact : ContractId PersonData
+     with
+       newContact : Text
+     controller owner
+     do
+       create this with contact = Some newContact
+
+   choice ClearContact : ContractId PersonData
+     controller owner
+     do
+       archive self
+       create this with contact = None
+
+    ensure name /= ""
+    signatory issuer
+    observer owner
+    choice Give : AssetId
+      with
+        newOwner : Party
+      controller owner
+      do create this with
+           owner = newOwner
+
+setup : Script AssetId
+setup = script do
+-- user_setup_begin
+  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
+  bob <- allocatePartyWithHint "Bob" (PartyIdHint "Bob")
+  aliceId <- validateUserId "alice"
+  bobId <- validateUserId "bob"
+  createUser (User aliceId (Some alice)) [CanActAs alice]
+  createUser (User bobId (Some bob)) [CanActAs bob]
+-- user_setup_end
+
+  aliceTV <- submit alice do
+    createCmd Asset with
+      issuer = alice
+      owner = alice
+      name = "TV"
+
+  bobTV <- submit alice do
+    exerciseCmd aliceTV Give with newOwner = bob
+
+  submit bob do
+    exerciseCmd bobTV Give with newOwner = alice
