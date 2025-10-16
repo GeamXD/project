@@ -1,15 +1,4 @@
-module Main where
-
-import Daml.Script
-
-type AssetId = ContractId Asset
-
-template Asset
-  with
-    issuer : Party
-    owner  : Party
-    name   : Text
-  wheremodule PersonData where
+module PersonData where
 
 import Daml.Script
 import DA.Optional (Optional(..))
@@ -60,36 +49,45 @@ template PersonData
      do
        archive self
        create this with contact = None
+template PersonDataProposal
+ with
+   proposal : PersonData
+ where
+   signatory proposal.issuer
+   observer proposal.owner 
+  
+   choice Accept : ContractId PersonData
+     controller proposal.owner
+     do
+       create proposal
+test_person_data = script do
+   issuer <- allocateParty "IssuerParty"
+   owner <- allocateParty "OwnerParty"
+  
+   let initialPersonData = PersonData with
+           issuer = issuer
+           owner = owner
+           dataId = "KYC-001"
+           personalInfo = ("Jane", "Doe", 35)
+           addresses = ["10 Downing Street"]
+           contact = Some "old.contact@example.com"
+          
+   proposalCid <- submit issuer do
+       createCmd PersonDataProposal with
+           proposal = initialPersonData
 
-    ensure name /= ""
-    signatory issuer
-    observer owner
-    choice Give : AssetId
-      with
-        newOwner : Party
-      controller owner
-      do create this with
-           owner = newOwner
 
-setup : Script AssetId
-setup = script do
--- user_setup_begin
-  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
-  bob <- allocatePartyWithHint "Bob" (PartyIdHint "Bob")
-  aliceId <- validateUserId "alice"
-  bobId <- validateUserId "bob"
-  createUser (User aliceId (Some alice)) [CanActAs alice]
-  createUser (User bobId (Some bob)) [CanActAs bob]
--- user_setup_end
+   personCid <- submit owner do
+       exerciseCmd proposalCid Accept
 
-  aliceTV <- submit alice do
-    createCmd Asset with
-      issuer = alice
-      owner = alice
-      name = "TV"
 
-  bobTV <- submit alice do
-    exerciseCmd aliceTV Give with newOwner = bob
-
-  submit bob do
-    exerciseCmd bobTV Give with newOwner = alice
+   Some contract <- queryContractId issuer personCid
+   assert (contract.contact == Some "old.contact@example.com")
+   let personKey = PersonKey with keyIssuer = issuer, keyDataId = "KYC-001"
+   newCid <- submit owner do
+     exerciseCmd personCid SetContact with
+         newContact = "new.contact@example.com"
+    
+   Some newContract <- queryContractId owner newCid
+   assert (newContract.contact == Some "new.contact@example.com")
+   return ()
